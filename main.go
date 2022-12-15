@@ -1,14 +1,13 @@
 package main
 
 import (
-	//"Hashnimals/camera"
 	"bytes"
 	_ "embed"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	camera "github.com/melonfunction/ebiten-camera"
+	"github.com/melonfunction/ebiten-camera"
 	"image"
 	"image/color"
 	_ "image/png"
@@ -54,7 +53,12 @@ type Player struct {
 	src    image.Rectangle
 	dst    image.Rectangle
 	Pos
-	speed float64
+	speed                 float64
+	moving                bool
+	dir                   int
+	up, down, right, left bool
+	frameCount            int
+	frame                 int
 }
 
 type Game struct {
@@ -82,6 +86,36 @@ type Game struct {
 func (g *Game) Update() error {
 	g.cam.SetPosition(g.p.X+float64(48)/2, g.p.Y+float64(48)/2)
 
+	if g.p.moving {
+		if g.p.up {
+			g.p.Y -= g.p.speed
+		}
+		if g.p.down {
+			g.p.Y += g.p.speed
+		}
+		if g.p.right {
+			g.p.X += g.p.speed
+		}
+		if g.p.left {
+			g.p.X -= g.p.speed
+		}
+
+		if g.p.frameCount%8 == 1 {
+			g.p.frame++
+		}
+	}
+
+	g.p.frameCount++
+	if g.p.frame > 3 {
+		g.p.frame = 0
+	}
+
+	g.p.src.Min.X = 48 * g.p.frame
+	g.p.src.Min.Y = 48 * g.p.dir
+
+	g.p.src.Max.X = 48*g.p.frame + 48
+	g.p.src.Max.Y = 48*g.p.dir + 48
+
 	// Zoom
 	_, scrollAmount := ebiten.Wheel()
 	if scrollAmount > 0 {
@@ -89,6 +123,10 @@ func (g *Game) Update() error {
 	} else if scrollAmount < 0 {
 		g.cam.Zoom(0.9)
 	}
+
+	g.p.moving = false
+
+	g.p.up, g.p.down, g.p.right, g.p.left = false, false, false, false
 	return nil
 }
 
@@ -103,9 +141,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	g.cam.Surface.DrawImage(grassSprite, g.cam.GetTranslation(tileOps, 0, 0))
 
 	playerOps := &ebiten.DrawImageOptions{}
-	playerOps = g.cam.GetRotation(playerOps, 0, -float64(48)/2, -float64(48)/2)
-	playerOps = g.cam.GetScale(playerOps, 1, 1)
-	playerOps = g.cam.GetSkew(playerOps, 0, 0)
+	//playerOps = g.cam.GetRotation(playerOps, 0, -float64(48)/2, -float64(48)/2)
+	//playerOps = g.cam.GetScale(playerOps, 1, 1)
+	//playerOps = g.cam.GetSkew(playerOps, 0, 0)
 	playerOps = g.cam.GetTranslation(playerOps, g.p.X, g.p.Y)
 	g.cam.Surface.DrawImage(g.p.sprite.SubImage(g.p.src).(*ebiten.Image), playerOps)
 	g.cam.Blit(screen)
@@ -130,15 +168,27 @@ func repeatingKeyPressed(key ebiten.Key) bool {
 func (g *Game) input() {
 	if ebiten.IsKeyPressed(ebiten.KeyUp) {
 		g.p.Y -= g.p.speed
+		g.p.moving = true
+		g.p.dir = 1
+		g.p.up = true
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyDown) {
 		g.p.Y += g.p.speed
+		g.p.moving = true
+		g.p.dir = 0
+		g.p.down = true
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyLeft) {
 		g.p.X -= g.p.speed
+		g.p.moving = true
+		g.p.dir = 2
+		g.p.left = true
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyRight) {
 		g.p.X += g.p.speed
+		g.p.moving = true
+		g.p.dir = 3
+		g.p.right = true
 	}
 	if repeatingKeyPressed(ebiten.KeyM) {
 		if g.audioPlayer.IsPlaying() {
@@ -148,26 +198,21 @@ func (g *Game) input() {
 		}
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyQ) {
-		//if g.camera.ZoomFactor > -2400 {
-		//	g.camera.ZoomFactor -= 1
-		//}
 		g.cam.Zoom(0.9)
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyE) {
-		//if g.cam.ZoomFactor < 2400 {
-		//	g.cam.ZoomFactor += 1
-		//}
 		g.cam.Zoom(1.1)
 	}
 
 	if ebiten.IsKeyPressed(ebiten.KeyR) {
-		//g.camera.Rotation += 1
+		//g.cam.Rotate(0.1)
 	}
 
 	if ebiten.IsKeyPressed(ebiten.KeySpace) {
 		//g.camera.Reset()
 	}
 }
+
 func NewGame() *Game {
 	audioContext := audio.NewContext(sampleRate)
 	type audioStream interface {
@@ -235,9 +280,6 @@ func init() {
 
 	grassSprite = ebiten.NewImageFromImage(img)
 
-}
-
-func quit() {
 }
 
 func main() {
