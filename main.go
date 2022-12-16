@@ -44,6 +44,15 @@ const (
 	typeMP3
 )
 
+type direction int
+
+const (
+	down direction = iota
+	up
+	left
+	right
+)
+
 type Pos struct {
 	X, Y float64
 }
@@ -53,17 +62,17 @@ type Player struct {
 	src    image.Rectangle
 	dst    image.Rectangle
 	Pos
-	speed                 float64
-	moving                bool
-	dir                   int
-	up, down, right, left bool
-	frameCount            int
-	frame                 int
+	speed      float64
+	moving     bool
+	dir        direction
+	frameCount int
+	frame      int
+	size       int
 }
 
 type Game struct {
 	keys []ebiten.Key
-	p    Player
+	p    *Player
 
 	//audio
 	musicPlayer   *Player
@@ -80,53 +89,65 @@ type Game struct {
 	musicType    musicType
 
 	//camera
-	cam *camera.Camera
+	cam        *camera.Camera
+	zoomFactor float64
+
+	//tiles
+	tileDest   image.Rectangle
+	tileSrc    image.Rectangle
+	tileMap    []int
+	srcMap     []string
+	mapW, mapH int
 }
 
 func (g *Game) Update() error {
 	g.cam.SetPosition(g.p.X+float64(48)/2, g.p.Y+float64(48)/2)
 
 	if g.p.moving {
-		if g.p.up {
+		switch g.p.dir {
+		case up:
 			g.p.Y -= g.p.speed
-		}
-		if g.p.down {
+		case down:
 			g.p.Y += g.p.speed
-		}
-		if g.p.right {
-			g.p.X += g.p.speed
-		}
-		if g.p.left {
+		case left:
 			g.p.X -= g.p.speed
+		case right:
+			g.p.X += g.p.speed
 		}
 
 		if g.p.frameCount%8 == 1 {
 			g.p.frame++
 		}
+	} else if g.p.frameCount%45 == 1 {
+		g.p.frame++
 	}
 
 	g.p.frameCount++
 	if g.p.frame > 3 {
 		g.p.frame = 0
 	}
+	if !g.p.moving && g.p.frame > 1 {
+		g.p.frame = 0
+	}
 
-	g.p.src.Min.X = 48 * g.p.frame
-	g.p.src.Min.Y = 48 * g.p.dir
+	g.p.src.Min.X = g.p.size * g.p.frame
+	g.p.src.Min.Y = g.p.size * int(g.p.dir)
 
-	g.p.src.Max.X = 48*g.p.frame + 48
-	g.p.src.Max.Y = 48*g.p.dir + 48
+	g.p.src.Max.X = g.p.size*g.p.frame + g.p.size
+	g.p.src.Max.Y = g.p.size*int(g.p.dir) + g.p.size
 
 	// Zoom
 	_, scrollAmount := ebiten.Wheel()
-	if scrollAmount > 0 {
-		g.cam.Zoom(1.1)
-	} else if scrollAmount < 0 {
-		g.cam.Zoom(0.9)
+	if scrollAmount > 0 && g.zoomFactor <= 5.0 {
+		g.zoomFactor += 0.1
+		g.cam.SetZoom(g.zoomFactor)
+	} else if scrollAmount < 0 && g.zoomFactor >= 0.5 {
+		g.zoomFactor -= 0.1
+		g.cam.SetZoom(g.zoomFactor)
 	}
 
 	g.p.moving = false
 
-	g.p.up, g.p.down, g.p.right, g.p.left = false, false, false, false
 	return nil
 }
 
@@ -147,6 +168,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	playerOps = g.cam.GetTranslation(playerOps, g.p.X, g.p.Y)
 	g.cam.Surface.DrawImage(g.p.sprite.SubImage(g.p.src).(*ebiten.Image), playerOps)
 	g.cam.Blit(screen)
+	g.cam.SetZoom(g.zoomFactor)
 	g.input()
 }
 
@@ -169,26 +191,22 @@ func (g *Game) input() {
 	if ebiten.IsKeyPressed(ebiten.KeyUp) {
 		g.p.Y -= g.p.speed
 		g.p.moving = true
-		g.p.dir = 1
-		g.p.up = true
+		g.p.dir = up
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyDown) {
 		g.p.Y += g.p.speed
 		g.p.moving = true
-		g.p.dir = 0
-		g.p.down = true
+		g.p.dir = down
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyLeft) {
 		g.p.X -= g.p.speed
 		g.p.moving = true
-		g.p.dir = 2
-		g.p.left = true
+		g.p.dir = left
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyRight) {
 		g.p.X += g.p.speed
 		g.p.moving = true
-		g.p.dir = 3
-		g.p.right = true
+		g.p.dir = right
 	}
 	if repeatingKeyPressed(ebiten.KeyM) {
 		if g.audioPlayer.IsPlaying() {
@@ -198,10 +216,16 @@ func (g *Game) input() {
 		}
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyQ) {
-		g.cam.Zoom(0.9)
+		if g.zoomFactor >= 0.5 {
+			g.zoomFactor -= 0.1
+			g.cam.SetZoom(g.zoomFactor)
+		}
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyE) {
-		g.cam.Zoom(1.1)
+		if g.zoomFactor <= 5.0 {
+			g.zoomFactor += 0.1
+			g.cam.SetZoom(g.zoomFactor)
+		}
 	}
 
 	if ebiten.IsKeyPressed(ebiten.KeyR) {
@@ -245,18 +269,19 @@ func NewGame() *Game {
 		seCh:          make(chan []byte),
 		volume128:     128,
 		musicType:     typeMP3,
-		cam:           camera.NewCamera(screenWidth, screenHeight, 0, 0, 0, 1),
+		cam:           camera.NewCamera(screenWidth, screenHeight, 0, 0, 0, 1.5),
+		zoomFactor:    1.5,
 	}
 }
 
-func NewPlayer() Player {
+func NewPlayer() *Player {
 	img, _, err := image.Decode(bytes.NewReader(PlayerPng))
 	if err != nil {
 		log.Fatal(err)
 	}
 	playerSprite := ebiten.NewImageFromImage(img)
 
-	return Player{
+	return &Player{
 		sprite: playerSprite,
 		src: image.Rectangle{
 			Min: image.Point{X: 0, Y: 0},
@@ -265,6 +290,7 @@ func NewPlayer() Player {
 		dst:   image.Rectangle{},
 		Pos:   Pos{},
 		speed: 3,
+		size:  48,
 	}
 
 }
