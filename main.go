@@ -1,317 +1,208 @@
 package main
 
 import (
-	"bytes"
-	_ "embed"
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/audio"
-	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
-	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	"github.com/melonfunction/ebiten-camera"
-	"image"
-	"image/color"
-	_ "image/png"
-	"io"
-	"log"
-	"time"
-)
-
-const (
-	screenWidth  = 1000
-	screenHeight = 480
-	sampleRate   = 32000
-)
-
-var (
-	running     = true
-	bkgColor    = color.RGBA{R: 147, G: 211, B: 196, A: 255}
-	grassSprite *ebiten.Image
-	//go:embed "assets/Tilesets/ground tiles/old tiles/Grass.png"
-	GrassPng []byte
-
-	//playerSprite *ebiten.Image
-	//go:embed "assets/Characters/Basic Charakter Spritesheet.png"
-	PlayerPng []byte
-
-	//go:embed "assets/Sound/AverysFarmLoopable.mp3"
-	AverysFarmMP3 []byte
-)
-
-type musicType int
-
-const (
-	typeOgg musicType = iota
-	typeMP3
+	"github.com/gen2brain/raylib-go/raylib"
+	"os"
+	"strconv"
+	"strings"
 )
 
 type direction int
 
 const (
-	down direction = iota
-	up
-	left
-	right
+	screenWidth  = 800
+	screenHeight = 450
 )
 
-type Pos struct {
-	X, Y float64
-}
+const (
+	playerDown direction = iota
+	playerUp
+	playerLeft
+	playerRight
+)
 
-type Player struct {
-	sprite *ebiten.Image
-	src    image.Rectangle
-	dst    image.Rectangle
-	Pos
-	speed      float64
-	moving     bool
-	dir        direction
+var (
+	running      = true
+	bkgColor     = rl.NewColor(147, 211, 196, 255)
+	grassSprite  rl.Texture2D
+	playerSprite rl.Texture2D
+
+	playerSrc    rl.Rectangle
+	playerDst    rl.Rectangle
+	playerSpeed  float32 = 3
+	playerMoving bool
+	playerDir    int
+	playerFrame  int
+
 	frameCount int
-	frame      int
-	size       int
-}
 
-type Game struct {
-	keys []ebiten.Key
-	p    *Player
-
-	//audio
-	musicPlayer   *Player
-	musicPlayerCh chan *Player
-	errCh         chan error
-
-	audioContext *audio.Context
-	audioPlayer  *audio.Player
-	current      time.Duration
-	total        time.Duration
-	seBytes      []byte
-	seCh         chan []byte
-	volume128    int
-	musicType    musicType
-
-	//camera
-	cam        *camera.Camera
-	zoomFactor float64
-
-	//tiles
-	tileDest   image.Rectangle
-	tileSrc    image.Rectangle
+	tileDst    rl.Rectangle
+	tileSrc    rl.Rectangle
 	tileMap    []int
 	srcMap     []string
 	mapW, mapH int
-}
 
-func (g *Game) Update() error {
-	g.cam.SetPosition(g.p.X+float64(48)/2, g.p.Y+float64(48)/2)
+	musicPaused bool
+	music       rl.Music
 
-	if g.p.moving {
-		switch g.p.dir {
-		case up:
-			g.p.Y -= g.p.speed
-		case down:
-			g.p.Y += g.p.speed
-		case left:
-			g.p.X -= g.p.speed
-		case right:
-			g.p.X += g.p.speed
-		}
+	cam rl.Camera2D
+)
 
-		if g.p.frameCount%8 == 1 {
-			g.p.frame++
-		}
-	} else if g.p.frameCount%45 == 1 {
-		g.p.frame++
-	}
+func drawScene() {
+	//rl.DrawTexture(grassSprite, 100, 50, rl.White)
 
-	g.p.frameCount++
-	if g.p.frame > 3 {
-		g.p.frame = 0
-	}
-	if !g.p.moving && g.p.frame > 1 {
-		g.p.frame = 0
-	}
+	for i := 0; i < len(tileMap); i++ {
+		if tileMap[i] != 0 {
+			tileDst.X = tileDst.Width * float32(i%mapW)
+			tileDst.Y = tileDst.Height * float32(i/mapH)
+			tileSrc.X = tileSrc.Width * float32((tileMap[i]-1)%int(grassSprite.Width/int32(tileSrc.Width)))
+			tileSrc.Y = tileSrc.Height * float32((tileMap[i]-1)/int(grassSprite.Width/int32(tileSrc.Width)))
 
-	g.p.src.Min.X = g.p.size * g.p.frame
-	g.p.src.Min.Y = g.p.size * int(g.p.dir)
-
-	g.p.src.Max.X = g.p.size*g.p.frame + g.p.size
-	g.p.src.Max.Y = g.p.size*int(g.p.dir) + g.p.size
-
-	// Zoom
-	_, scrollAmount := ebiten.Wheel()
-	if scrollAmount > 0 && g.zoomFactor <= 5.0 {
-		g.zoomFactor += 0.1
-		g.cam.SetZoom(g.zoomFactor)
-	} else if scrollAmount < 0 && g.zoomFactor >= 0.5 {
-		g.zoomFactor -= 0.1
-		g.cam.SetZoom(g.zoomFactor)
-	}
-
-	g.p.moving = false
-
-	return nil
-}
-
-func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return screenWidth, screenHeight
-}
-
-func (g *Game) Draw(screen *ebiten.Image) {
-	g.cam.Surface.Clear()
-	g.cam.Surface.Fill(bkgColor)
-	tileOps := &ebiten.DrawImageOptions{}
-	g.cam.Surface.DrawImage(grassSprite, g.cam.GetTranslation(tileOps, 0, 0))
-
-	playerOps := &ebiten.DrawImageOptions{}
-	//playerOps = g.cam.GetRotation(playerOps, 0, -float64(48)/2, -float64(48)/2)
-	//playerOps = g.cam.GetScale(playerOps, 1, 1)
-	//playerOps = g.cam.GetSkew(playerOps, 0, 0)
-	playerOps = g.cam.GetTranslation(playerOps, g.p.X, g.p.Y)
-	g.cam.Surface.DrawImage(g.p.sprite.SubImage(g.p.src).(*ebiten.Image), playerOps)
-	g.cam.Blit(screen)
-	g.cam.SetZoom(g.zoomFactor)
-	g.input()
-}
-
-func repeatingKeyPressed(key ebiten.Key) bool {
-	const (
-		delay    = 30
-		interval = 3
-	)
-	d := inpututil.KeyPressDuration(key)
-	if d == 1 {
-		return true
-	}
-	if d >= delay && (d-delay)%interval == 0 {
-		return true
-	}
-	return false
-}
-
-func (g *Game) input() {
-	if ebiten.IsKeyPressed(ebiten.KeyUp) {
-		g.p.Y -= g.p.speed
-		g.p.moving = true
-		g.p.dir = up
-	}
-	if ebiten.IsKeyPressed(ebiten.KeyDown) {
-		g.p.Y += g.p.speed
-		g.p.moving = true
-		g.p.dir = down
-	}
-	if ebiten.IsKeyPressed(ebiten.KeyLeft) {
-		g.p.X -= g.p.speed
-		g.p.moving = true
-		g.p.dir = left
-	}
-	if ebiten.IsKeyPressed(ebiten.KeyRight) {
-		g.p.X += g.p.speed
-		g.p.moving = true
-		g.p.dir = right
-	}
-	if repeatingKeyPressed(ebiten.KeyM) {
-		if g.audioPlayer.IsPlaying() {
-			g.audioPlayer.Pause()
-		} else {
-			g.audioPlayer.Play()
+			rl.DrawTexturePro(grassSprite, tileSrc, tileDst, rl.NewVector2(tileDst.Width, tileDst.Height), 0, rl.White)
 		}
 	}
-	if ebiten.IsKeyPressed(ebiten.KeyQ) {
-		if g.zoomFactor >= 0.5 {
-			g.zoomFactor -= 0.1
-			g.cam.SetZoom(g.zoomFactor)
-		}
-	}
-	if ebiten.IsKeyPressed(ebiten.KeyE) {
-		if g.zoomFactor <= 5.0 {
-			g.zoomFactor += 0.1
-			g.cam.SetZoom(g.zoomFactor)
-		}
-	}
-
-	if ebiten.IsKeyPressed(ebiten.KeyR) {
-		//g.cam.Rotate(0.1)
-	}
-
-	if ebiten.IsKeyPressed(ebiten.KeySpace) {
-		//g.camera.Reset()
-	}
+	rl.DrawTexturePro(playerSprite, playerSrc, playerDst, rl.NewVector2(playerDst.Width, playerDst.Height), 0, rl.White)
 }
 
-func NewGame() *Game {
-	audioContext := audio.NewContext(sampleRate)
-	type audioStream interface {
-		io.ReadSeeker
-		Length() int64
+func input() {
+	if rl.IsKeyDown(rl.KeyUp) {
+		playerDst.Y -= playerSpeed
+		playerMoving = true
+		playerDir = int(playerUp)
+	}
+	if rl.IsKeyDown(rl.KeyDown) {
+		playerDst.Y += playerSpeed
+		playerMoving = true
+		playerDir = int(playerDown)
+	}
+	if rl.IsKeyDown(rl.KeyLeft) {
+		playerDst.X -= playerSpeed
+		playerMoving = true
+		playerDir = int(playerLeft)
+	}
+	if rl.IsKeyDown(rl.KeyRight) {
+		playerDst.X += playerSpeed
+		playerMoving = true
+		playerDir = int(playerRight)
+	}
+	if rl.IsKeyDown(rl.KeyQ) {
+		musicPaused = !musicPaused
+	}
+}
+func render() {
+	rl.BeginDrawing()
+	rl.ClearBackground(bkgColor)
+
+	rl.BeginMode2D(cam)
+	drawScene()
+	rl.EndMode2D()
+
+	rl.EndDrawing()
+}
+func update() {
+	running = !rl.WindowShouldClose()
+
+	playerSrc.X = 0
+	playerSrc.X = playerSrc.Width * float32(playerFrame)
+	if playerMoving {
+		switch playerDir {
+		case int(playerUp):
+			playerDst.Y -= playerSpeed
+		case int(playerDown):
+			playerDst.Y += playerSpeed
+		case int(playerLeft):
+			playerDst.X -= playerSpeed
+		case int(playerRight):
+			playerDst.X += playerSpeed
+		}
+		if frameCount%8 == 1 {
+			playerFrame++
+		}
+	} else if frameCount%45 == 1 {
+		playerFrame++
 	}
 
-	const bytesPerSample = 4
+	frameCount++
+	if playerFrame > 3 {
+		playerFrame = 0
+	}
+	if !playerMoving && playerFrame > 1 {
+		playerFrame = 0
+	}
 
-	var s audioStream
+	playerSrc.X = playerSrc.Width * float32(playerFrame)
+	playerSrc.Y = playerSrc.Height * float32(playerDir)
+	rl.UpdateMusicStream(music)
+	if musicPaused {
+		rl.PauseMusicStream(music)
+	} else {
+		rl.ResumeMusicStream(music)
+	}
 
-	s, err := mp3.DecodeWithoutResampling(bytes.NewReader(AverysFarmMP3))
+	cam.Target = rl.NewVector2(playerDst.X-(playerDst.Width/2), playerDst.Y-(playerDst.Height/2))
+
+	playerMoving = false
+}
+
+func loadMap(mapFile string) {
+	file, err := os.ReadFile(mapFile)
 	if err != nil {
 		panic(err)
 	}
-
-	p, err := audioContext.NewPlayer(s)
-
-	p.Play()
-	return &Game{
-		keys:          nil,
-		p:             NewPlayer(),
-		musicPlayerCh: make(chan *Player),
-		errCh:         make(chan error),
-		audioContext:  audioContext,
-		audioPlayer:   p,
-		current:       0,
-		total:         time.Second * time.Duration(s.Length()) / bytesPerSample / sampleRate,
-		seBytes:       nil,
-		seCh:          make(chan []byte),
-		volume128:     128,
-		musicType:     typeMP3,
-		cam:           camera.NewCamera(screenWidth, screenHeight, 0, 0, 0, 1.5),
-		zoomFactor:    1.5,
+	remNewLines := strings.Replace(string(file), "\r\n", " ", -1)
+	sliced := strings.Split(remNewLines, " ")
+	mapW = -1
+	mapH = -1
+	for i := 0; i < len(sliced); i++ {
+		s, _ := strconv.Atoi(sliced[i])
+		if mapW == -1 {
+			mapW = s
+		} else if mapH == -1 {
+			mapH = s
+		} else if i < mapW*mapH+2 {
+			tileMap = append(tileMap, s)
+		} else {
+			srcMap = append(srcMap, sliced[i])
+		}
 	}
-}
-
-func NewPlayer() *Player {
-	img, _, err := image.Decode(bytes.NewReader(PlayerPng))
-	if err != nil {
-		log.Fatal(err)
-	}
-	playerSprite := ebiten.NewImageFromImage(img)
-
-	return &Player{
-		sprite: playerSprite,
-		src: image.Rectangle{
-			Min: image.Point{X: 0, Y: 0},
-			Max: image.Point{X: 48, Y: 48},
-		},
-		dst:   image.Rectangle{},
-		Pos:   Pos{},
-		speed: 3,
-		size:  48,
-	}
-
 }
 
 func init() {
-	ebiten.SetWindowSize(screenWidth, screenHeight)
-	ebiten.SetWindowTitle("Hashnimals")
+	rl.InitWindow(screenWidth, screenHeight, "Hashnimals")
+	rl.SetExitKey(0)
+	rl.SetTargetFPS(60)
 
-	img, _, err := image.Decode(bytes.NewReader(GrassPng))
-	if err != nil {
-		log.Fatal(err)
-	}
+	grassSprite = rl.LoadTexture("assets/Tilesets/ground tiles/old tiles/Grass.png")
 
-	grassSprite = ebiten.NewImageFromImage(img)
+	tileDst = rl.NewRectangle(0, 0, 16, 16)
+	tileSrc = rl.NewRectangle(0, 0, 16, 16)
 
+	playerSprite = rl.LoadTexture("assets/Characters/Basic Charakter Spritesheet.png")
+
+	playerSrc = rl.NewRectangle(0, 0, 48, 48)
+	playerDst = rl.NewRectangle(200, 200, 100, 100)
+
+	rl.InitAudioDevice()
+	music = rl.LoadMusicStream("assets/Sound/AverysFarmLoopable.mp3")
+	musicPaused = false
+	rl.PlayMusicStream(music)
+
+	cam = rl.NewCamera2D(rl.NewVector2(float32(screenWidth)/2, float32(screenHeight)/2), rl.NewVector2(playerDst.X-(playerDst.Width/2), playerDst.Y-(playerDst.Height/2)), 0.0, 1.0)
+	loadMap("level1.map")
 }
-
+func quit() {
+	rl.UnloadTexture(grassSprite)
+	rl.UnloadTexture(playerSprite)
+	rl.UnloadMusicStream(music)
+	rl.CloseAudioDevice()
+	rl.CloseWindow()
+}
 func main() {
-	g := NewGame()
-
-	if err := ebiten.RunGame(g); err != nil {
-		log.Fatal(err)
+	for !rl.WindowShouldClose() {
+		input()
+		update()
+		render()
 	}
+	quit()
+
 }
