@@ -1,17 +1,17 @@
 package main
 
 import (
+	"fmt"
 	"github.com/gen2brain/raylib-go/raylib"
+	"github.com/lafriks/go-tiled"
 	"os"
-	"strconv"
-	"strings"
 )
 
 type direction int
 
 const (
 	screenWidth  = 800
-	screenHeight = 450
+	screenHeight = 600
 )
 
 const (
@@ -22,25 +22,24 @@ const (
 )
 
 var (
-	running      = true
 	bkgColor     = rl.NewColor(147, 211, 196, 255)
-	grassSprite  rl.Texture2D
+	textureIndex map[string]rl.Texture2D
+
 	playerSprite rl.Texture2D
 
 	playerSrc    rl.Rectangle
 	playerDst    rl.Rectangle
-	playerSpeed  float32 = 3
+	playerSpeed  float32 = 1.4
 	playerMoving bool
 	playerDir    int
 	playerFrame  int
 
 	frameCount int
 
-	tileDst    rl.Rectangle
-	tileSrc    rl.Rectangle
-	tileMap    []int
-	srcMap     []string
-	mapW, mapH int
+	tileDst rl.Rectangle
+	tileSrc rl.Rectangle
+
+	tiledMap *tiled.Map
 
 	musicPaused bool
 	music       rl.Music
@@ -49,18 +48,26 @@ var (
 )
 
 func drawScene() {
-	//rl.DrawTexture(grassSprite, 100, 50, rl.White)
+	for _, layer := range tiledMap.Layers {
+		if layer.Visible {
+			for i, tile := range layer.Tiles {
+				if !tile.IsNil() {
+					tileSrc.X = float32(tile.GetTileRect().Min.X)
+					tileSrc.Y = float32(tile.GetTileRect().Min.Y)
+					tileSrc.Width = float32(tile.GetTileRect().Size().X)
+					tileSrc.Height = float32(tile.GetTileRect().Size().Y)
 
-	for i := 0; i < len(tileMap); i++ {
-		if tileMap[i] != 0 {
-			tileDst.X = tileDst.Width * float32(i%mapW)
-			tileDst.Y = tileDst.Height * float32(i/mapH)
-			tileSrc.X = tileSrc.Width * float32((tileMap[i]-1)%int(grassSprite.Width/int32(tileSrc.Width)))
-			tileSrc.Y = tileSrc.Height * float32((tileMap[i]-1)/int(grassSprite.Width/int32(tileSrc.Width)))
+					tileDst.X = tileDst.Width * float32(i%tiledMap.Width)
+					tileDst.Y = tileDst.Width * float32(i/tiledMap.Width)
 
-			rl.DrawTexturePro(grassSprite, tileSrc, tileDst, rl.NewVector2(tileDst.Width, tileDst.Height), 0, rl.White)
+					rl.DrawTexturePro(textureIndex[tile.Tileset.Name], tileSrc, tileDst, rl.NewVector2(tileDst.Width, tileDst.Height), 0, rl.White)
+				} else {
+
+				}
+			}
 		}
 	}
+
 	rl.DrawTexturePro(playerSprite, playerSrc, playerDst, rl.NewVector2(playerDst.Width, playerDst.Height), 0, rl.White)
 }
 
@@ -89,6 +96,7 @@ func input() {
 		musicPaused = !musicPaused
 	}
 }
+
 func render() {
 	rl.BeginDrawing()
 	rl.ClearBackground(bkgColor)
@@ -99,8 +107,9 @@ func render() {
 
 	rl.EndDrawing()
 }
+
 func update() {
-	running = !rl.WindowShouldClose()
+	//running = !rl.WindowShouldClose()
 
 	playerSrc.X = 0
 	playerSrc.X = playerSrc.Width * float32(playerFrame)
@@ -144,25 +153,25 @@ func update() {
 	playerMoving = false
 }
 
-func loadMap(mapFile string) {
-	file, err := os.ReadFile(mapFile)
+func loadTMX(mapFile string) {
+	var err error
+	textureIndex = make(map[string]rl.Texture2D)
+
+	tiledMap, err = tiled.LoadFile(mapFile)
 	if err != nil {
-		panic(err)
+		fmt.Printf("error parsing map: %s", err.Error())
+		os.Exit(2)
 	}
-	remNewLines := strings.Replace(string(file), "\r\n", " ", -1)
-	sliced := strings.Split(remNewLines, " ")
-	mapW = -1
-	mapH = -1
-	for i := 0; i < len(sliced); i++ {
-		s, _ := strconv.Atoi(sliced[i])
-		if mapW == -1 {
-			mapW = s
-		} else if mapH == -1 {
-			mapH = s
-		} else if i < mapW*mapH+2 {
-			tileMap = append(tileMap, s)
-		} else {
-			srcMap = append(srcMap, sliced[i])
+
+	for _, layer := range tiledMap.Layers {
+		//fmt.Println(layer.Name)
+		for _, tile := range layer.Tiles {
+			if !tile.IsNil() {
+				_, ok := textureIndex[tile.Tileset.Name]
+				if !ok {
+					textureIndex[tile.Tileset.Name] = rl.LoadTexture(tile.Tileset.Image.Source)
+				}
+			}
 		}
 	}
 }
@@ -172,15 +181,13 @@ func init() {
 	rl.SetExitKey(0)
 	rl.SetTargetFPS(60)
 
-	grassSprite = rl.LoadTexture("assets/Tilesets/ground tiles/old tiles/Grass.png")
-
 	tileDst = rl.NewRectangle(0, 0, 16, 16)
 	tileSrc = rl.NewRectangle(0, 0, 16, 16)
 
 	playerSprite = rl.LoadTexture("assets/Characters/Basic Charakter Spritesheet.png")
 
 	playerSrc = rl.NewRectangle(0, 0, 48, 48)
-	playerDst = rl.NewRectangle(200, 200, 100, 100)
+	playerDst = rl.NewRectangle(200, 200, 60, 60)
 
 	rl.InitAudioDevice()
 	music = rl.LoadMusicStream("assets/Sound/AverysFarmLoopable.mp3")
@@ -188,10 +195,11 @@ func init() {
 	rl.PlayMusicStream(music)
 
 	cam = rl.NewCamera2D(rl.NewVector2(float32(screenWidth)/2, float32(screenHeight)/2), rl.NewVector2(playerDst.X-(playerDst.Width/2), playerDst.Y-(playerDst.Height/2)), 0.0, 1.0)
-	loadMap("level1.map")
+	cam.Zoom = 3
+
+	loadTMX("island.tmx")
 }
 func quit() {
-	rl.UnloadTexture(grassSprite)
 	rl.UnloadTexture(playerSprite)
 	rl.UnloadMusicStream(music)
 	rl.CloseAudioDevice()
